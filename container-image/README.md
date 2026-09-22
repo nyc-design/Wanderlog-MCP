@@ -129,3 +129,13 @@ does not require changing the committed devcontainer configuration or publishing
 feature-branch images. The build context admits only the Dockerfile, startup
 script, gateway server/auth modules, and requirements file—not tests, arbitrary
 Python modules, SQLite databases, keys, logs, or other runtime files.
+
+## Session-only reservation fix
+
+The pinned upstream `currentUserID()` helper dereferenced a nil credential
+object when no keychain/file credentials existed. The gateway intentionally uses
+a per-request environment session instead, so reservation writes could panic
+before mutation. `patches/session-only-credentials.patch` adds the nil check,
+allowing the existing no-user-ID fallback. The synthetic regression fails with
+the original source and passes with the patch. Every image build runs that test
+before compiling the binary; no real account or session is used.

@@ -3,12 +3,17 @@ FROM --platform=$BUILDPLATFORM golang:1.26.6-bookworm AS cli
 ARG TARGETOS
 ARG TARGETARCH
 ARG WANDERLOG_COMMIT=6d27c324c4aeca54ee1bf027d41e9f415e329734
+COPY container-image/patches/ /patches/
 WORKDIR /src
 RUN git init . \
     && git remote add origin https://github.com/denysvitali/wanderlog-cli.git \
     && git fetch --depth=1 origin "${WANDERLOG_COMMIT}" \
     && git checkout --detach FETCH_HEAD \
     && test "$(git rev-parse HEAD)" = "${WANDERLOG_COMMIT}" \
+    && git apply --check /patches/session-only-credentials.patch \
+    && git apply /patches/session-only-credentials.patch \
+    && cp /patches/gateway_regression_test.go cmd/ \
+    && CGO_ENABLED=0 go test ./cmd -run TestGatewaySessionOnlyCurrentUserID -count=1 \
     && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/wanderlog .
 
 FROM python:3.13-slim-bookworm
