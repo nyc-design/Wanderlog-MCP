@@ -18,6 +18,7 @@ model {
       mcp = fn 'server.make_app()'
       verify = fn 'server.validate_session()'
       cli = fn 'server.cli_rpc()'
+      checklists = fn 'checklists.call_tool()'
     }
     store = container 'Private encrypted SQLite state'
     process = container 'Isolated Wanderlog CLI process'
@@ -32,6 +33,8 @@ model {
   workspace.gateway.mcp -> workspace.gateway.auth 'Authenticates access token'
   workspace.gateway.mcp -> workspace.gateway.cli 'Consent-gated itinerary read/write tools'
   workspace.gateway.cli -> workspace.process 'Private environment and stdio'
+  workspace.gateway.mcp -> workspace.gateway.checklists 'Consent-gated exact checklist targeting'
+  workspace.gateway.checklists -> wanderlog.api 'Raw reads, guarded block mutation and readback'
   workspace.process -> wanderlog.api 'Per-user cookie over HTTPS'
 }
 views {
@@ -61,6 +64,8 @@ views {
     workspace.gateway.mcp -> workspace.gateway.auth
     workspace.gateway.mcp -> workspace.gateway.cli
     workspace.gateway.cli -> workspace.process
-    workspace.process -> wanderlog.api
+    workspace.gateway.mcp -> workspace.gateway.checklists 'Consent-gated exact checklist targeting'
+  workspace.gateway.checklists -> wanderlog.api 'Raw reads, guarded block mutation and readback'
+  workspace.process -> wanderlog.api
   }
 }

@@ -8,8 +8,10 @@ script dependencies. Coder/envbuilder supplies infrastructure and public HTTPS.
 - OAuth public-client authorization code flow, mandatory S256 PKCE and exact
   resource binding. Users enter only a Wanderlog `connect.sid` cookie value.
 - Separate opaque MCP tokens; upstream credentials never serve as bearer tokens.
-- Every tool request starts an isolated CLI stdio subprocess with a temporary
+- CLI-backed tool requests start an isolated CLI stdio subprocess with a temporary
   HOME and minimal environment. No shared upstream clients, config, or caches.
+- Native checklist tools use raw reads and per-request credentials, exact section/block
+  IDs, guarded mutations and verified readback; never infer legacy checklist-section IDs.
 - Explicit read/write itinerary tool allowlists; never expose upstream config/account tools.
 - Write access requires per-grant browser consent; existing grants remain read-only.
 - Canonical external origin comes from PUBLIC_URL, not incoming proxy headers.

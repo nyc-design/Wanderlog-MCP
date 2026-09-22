@@ -45,7 +45,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await response.json())['result']['protocolVersion'], '2025-11-25')
         response = await self.rpc('tools/list')
         tools = (await response.json())['result']['tools']
-        self.assertEqual([t['name'] for t in tools], ['list_trips'])
+        self.assertEqual([t['name'] for t in tools], ['list_trips', 'list_itinerary_checklists'])
         self.assertTrue(tools[0]['annotations']['readOnlyHint'])
         response = await self.rpc('tools/call', {'name': 'config_get'})
         self.assertEqual((await response.json())['error']['code'], -32602)
@@ -94,7 +94,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             {'name': 'server_logout'}, {'name': 'set_session_store_value'}]}}
         with patch.object(FakeAuth, 'authenticate', side_effect=auth):
             response = await self.rpc('tools/list')
-            self.assertEqual([t['name'] for t in (await response.json())['result']['tools']], ['list_trips'])
+            self.assertEqual([t['name'] for t in (await response.json())['result']['tools']], ['list_trips', 'list_itinerary_checklists'])
             self.runner.reset_mock()
             response = await self.rpc('tools/call', {'name': 'delete_trip'})
             self.assertIn('error', await response.json())
@@ -102,7 +102,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             headers = dict(self.headers, **{'X-Test-Write': 'yes'})
             response = await self.rpc('tools/list', headers=headers)
             tools = (await response.json())['result']['tools']
-            self.assertEqual([t['name'] for t in tools], ['list_trips', 'add_place', 'delete_trip'])
+            self.assertEqual([t['name'] for t in tools], ['list_trips', 'add_place', 'delete_trip'] + [t['name'] for t in server.CHECKLIST_TOOLS])
             self.assertFalse(tools[1]['annotations']['readOnlyHint'])
             self.assertTrue(tools[2]['annotations']['destructiveHint'])
             self.runner.return_value = {'result': {'content': []}}
@@ -110,6 +110,20 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('result', await response.json())
             response = await self.rpc('tools/call', {'name': 'server_logout'}, headers=headers)
             self.assertIn('error', await response.json())
+
+    async def test_native_checklist_dispatch_and_write_denial(self):
+        with patch('server.checklist_call', new_callable=AsyncMock) as native:
+            native.return_value = {'content': [], 'isError': False}
+            response = await self.rpc('tools/call', {'name': 'list_itinerary_checklists',
+                                                    'arguments': {'trip_key': 'synthetic'}})
+            self.assertIn('result', await response.json())
+            native.assert_awaited_once()
+            self.runner.assert_not_awaited()
+            native.reset_mock()
+            response = await self.rpc('tools/call', {'name': 'add_itinerary_checklist_items',
+                                                    'arguments': {}})
+            self.assertIn('error', await response.json())
+            native.assert_not_awaited()
 
     async def test_request_boundaries(self):
         response = await self.rpc('ping', headers=dict(self.headers, Host='attacker.example'))

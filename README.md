@@ -133,3 +133,23 @@ is not proof that a write failed: always read back before retrying.
 `add_lodging` requires a resolvable place ID or a property name with verified
 latitude/longitude. The gateway rejects missing location data before invoking
 the CLI, and tool discovery documents that requirement.
+
+### Itinerary checklist blocks
+
+Use `list_itinerary_checklists` to discover the exact parent section ID/heading,
+checklist block ID/title and unmodified checklist items. Unlike the CLI's typed
+trip model, this preserves checklist titles and rich text from the raw response.
+
+Use `add_itinerary_checklist_items`, `toggle_itinerary_checklist_item`, or
+`delete_itinerary_checklist_item` with the discovered `itinerary_section_id` and
+`checklist_block_id`. Writes require editing consent, recheck the complete parent section immediately before writing, and verify the exact destination after mutation. No
+fallback to the first checklist or Things to Pack is permitted. Repeated titles
+are safe because targeting uses both IDs. Failed/uncertain mutations are not
+automatically retried.
+
+The older `add_checklist_items`/`toggle_checklist_item` target a different, standalone
+checklist-section API. Never pass itinerary block IDs to those legacy tools.
+
+Checklist writes are read back and never automatically retried. Avoid concurrent
+edits to the same section: atomic compare-and-swap protection is not verified on
+the upstream service, so the pre-write check cannot eliminate every external race.

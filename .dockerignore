@@ -11,3 +11,5 @@
 !container-image/patches/
 !container-image/patches/session-only-credentials.patch
 !container-image/patches/gateway_regression_test.go
+
+!mcp/checklists.py

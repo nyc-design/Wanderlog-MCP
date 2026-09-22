@@ -11,11 +11,12 @@ from urllib.parse import urlsplit, quote, unquote
 import aiohttp
 from aiohttp import web
 from auth import build_auth
+from checklists import TOOL_DEFINITIONS as CHECKLIST_TOOLS, call_tool as checklist_call
 
 # Explicit allowlist: upstream also exposes account/configuration tools which must
 # never be reachable merely because a future upstream release adds them.
 READ_TOOLS = frozenset({
-    "list_trips", "get_trip", "get_trip_plan", "get_itinerary", "list_places",
+    "list_itinerary_checklists", "list_trips", "get_trip", "get_trip_plan", "get_itinerary", "list_places",
     "list_sections", "get_flights", "get_trip_sections", "export_trip",
     "get_trip_places", "get_trip_history", "get_trip_images", "get_trip_expenses_csv",
     "search_places", "search_places_google", "search_places_wanderlog",
@@ -28,7 +29,8 @@ READ_TOOLS = frozenset({
     "get_if_edited", "find_place_from_lng_lat", "get_place_cards",
 })
 WRITE_TOOLS = frozenset({
-    "add_place", "remove_place", "move_place", "reorder_places", "update_place_notes",
+    "add_itinerary_checklist_items", "toggle_itinerary_checklist_item",
+    "delete_itinerary_checklist_item", "add_place", "remove_place", "move_place", "reorder_places", "update_place_notes",
     "update_place_visit_time", "delete_itinerary_block", "delete_section",
     "clear_section_blocks", "nuke_trip_places", "autofill_day", "optimize_route",
     "create_trip", "create_example_trip", "create_trip_from_flights", "copy_trip",
@@ -253,7 +255,14 @@ def make_app(public_url, state_dir, runner=cli_rpc, validator=None):
                 raise web.HTTPServiceUnavailable(headers={"Retry-After": "5"})
             try:
                 async with semaphore:
-                    upstream = await runner(identity["session_token"], method, params)
+                    if method == "tools/call" and params.get("name") in {t["name"] for t in CHECKLIST_TOOLS}:
+                        upstream = {"result": await checklist_call(app[HTTP_CLIENT], identity["session_token"],
+                                                                 params["name"], params.get("arguments", {}))}
+                    else:
+                        upstream = await runner(identity["session_token"], method, params)
+                        if method == "tools/list" and "result" in upstream and "tools" in upstream["result"]:
+                            upstream = {**upstream, "result": {**upstream["result"],
+                                "tools": upstream["result"]["tools"] + CHECKLIST_TOOLS}}
                 if "error" in upstream:
                     details = upstream["error"]
                     message = details.get("message", str(details)) if isinstance(details, dict) else str(details)
@@ -266,6 +275,10 @@ def make_app(public_url, state_dir, runner=cli_rpc, validator=None):
                              "destructiveHint": tool["name"] in WRITE_TOOLS, "openWorldHint": True})
                              for tool in result["tools"] if tool["name"] in allowed_tools]}
                     for tool in result["tools"]:
+                        if tool["name"] in {"add_checklist_items", "toggle_checklist_item"}:
+                            tool["description"] = "Legacy standalone checklist-section API, NOT itinerary checklist blocks. " \
+                                "Never use itinerary section/block IDs here. Use list_itinerary_checklists and the " \
+                                "explicit itinerary checklist tools for titled blocks such as Urgent. " + tool.get("description", "")
                         if tool["name"] == "add_lodging":
                             tool["description"] = tool.get("description", "") + (
                                 " REQUIRED LOCATION: supply a real place_id/propertyPlaceId, OR the property "
