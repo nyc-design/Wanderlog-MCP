@@ -1,5 +1,7 @@
 # Build the upstream CLI from an immutable revision; no Coder base image.
-FROM golang:1.26.6-bookworm AS cli
+FROM --platform=$BUILDPLATFORM golang:1.26.6-bookworm AS cli
+ARG TARGETOS
+ARG TARGETARCH
 ARG WANDERLOG_COMMIT=6d27c324c4aeca54ee1bf027d41e9f415e329734
 WORKDIR /src
 RUN git init . \
@@ -7,7 +9,7 @@ RUN git init . \
     && git fetch --depth=1 origin "${WANDERLOG_COMMIT}" \
     && git checkout --detach FETCH_HEAD \
     && test "$(git rev-parse HEAD)" = "${WANDERLOG_COMMIT}" \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/wanderlog .
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/wanderlog .
 
 FROM python:3.13-slim-bookworm
 RUN apt-get update \
