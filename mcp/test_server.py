@@ -65,6 +65,25 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         response = await self.rpc('ping', headers=dict(self.headers, Origin='null'))
         self.assertEqual(response.status, 403)
 
+    async def test_oauth_callback_csp_survives_gateway_middleware(self):
+        async def validate(token):
+            return None
+        with tempfile.TemporaryDirectory() as state:
+            client = TestClient(TestServer(server.make_app(
+                'https://mcp.example.com', state, validator=validate)))
+            await client.start_server()
+            try:
+                response = await client.get('/.well-known/oauth-authorization-server',
+                    headers={'Host': 'mcp.example.com'})
+                csp = response.headers['Content-Security-Policy']
+                self.assertIn("form-action 'self'", csp)
+                self.assertIn('https://chatgpt.com', csp)
+                self.assertIn('https://chat.openai.com', csp)
+                self.assertNotIn('*', csp)
+                self.assertIn("frame-ancestors 'none'", csp)
+            finally:
+                await client.close()
+
     async def test_request_boundaries(self):
         response = await self.rpc('ping', headers=dict(self.headers, Host='attacker.example'))
         self.assertEqual(response.status, 421)

@@ -554,6 +554,12 @@ Offline access allows this client to renew access without reconnecting.</p>
 def build_auth(app: web.Application, public_url: str, state_dir: str | Path, validate: Validate) -> Auth:
     """Install OAuth/discovery routes and cleanup; returns the MCP authenticator."""
     auth = Auth(public_url, state_dir, validate)
+    # Browsers can apply form-action to the 303 callback destination as well
+    # as the initial POST. Only configured, validated callback hosts qualify.
+    security_headers = dict(HEADERS)
+    destinations = " ".join("https://" + host for host in sorted(auth.callback_hosts))
+    security_headers["Content-Security-Policy"] = HEADERS["Content-Security-Policy"].replace(
+        "form-action 'self'", "form-action 'self' " + destinations)
 
     @web.middleware
     async def security(request, handler):
@@ -570,9 +576,9 @@ def build_auth(app: web.Application, public_url: str, state_dir: str | Path, val
         except sqlite3.OperationalError:
             response = _error("temporarily_unavailable", 503)
         except web.HTTPException as exc:
-            exc.headers.update(HEADERS)
+            exc.headers.update(security_headers)
             raise
-        response.headers.update(HEADERS)
+        response.headers.update(security_headers)
         return response
 
     app.middlewares.append(security)
