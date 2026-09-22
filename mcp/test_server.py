@@ -183,12 +183,8 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
                     text = await response.text()
                     self.assertNotIn(secret, text)
                     body = json.loads(text)
-                    if 'error' in upstream:
-                        self.assertEqual(body['error'],
-                            {'code': -32603, 'message': 'Wanderlog request failed'})
-                    else:
-                        self.assertEqual(body['result'], {'isError': True, 'content': [
-                            {'type': 'text', 'text': 'Wanderlog request failed. Check arguments or reconnect your account.'}]})
+                    self.assertTrue(body['result']['isError'])
+                    self.assertIn('[REDACTED]', text)
             for exception in [RuntimeError, ValueError, OSError, TypeError, KeyError]:
                 with self.subTest(exception=exception):
                     self.runner.side_effect = exception(secret)
@@ -196,8 +192,33 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(response.status, 200)
                     text = await response.text()
                     self.assertNotIn(secret, text)
-                    self.assertEqual(json.loads(text)['error'],
-                        {'code': -32603, 'message': 'Wanderlog request failed'})
+                    self.assertTrue(json.loads(text)['result']['isError'])
+                    self.assertIn(exception.__name__, text)
+
+    async def test_actionable_failure_details_and_timeout(self):
+        self.runner.side_effect = None
+        message = 'latitude and longitude are required; connect.sid=secret; Bearer access-secret'
+        self.runner.return_value = {'result': {'isError': True, 'content': [{'type': 'text', 'text': message}]}}
+        response = await self.rpc('tools/call', {'name': 'list_trips'})
+        text = (await response.json())['result']['content'][0]['text']
+        self.assertIn('latitude and longitude are required', text)
+        self.assertNotIn('access-secret', text)
+        self.runner.side_effect = TimeoutError()
+        response = await self.rpc('tools/call', {'name': 'list_trips'})
+        result = (await response.json())['result']
+        self.assertTrue(result['isError'])
+        self.assertIn('UNKNOWN', result['content'][0]['text'])
+        self.assertIn('read back', result['content'][0]['text'])
+
+    async def test_lodging_preflight_does_not_call_upstream(self):
+        async def auth(request):
+            return {'id': 'grant', 'session_token': 'session', 'can_write': True}
+        with patch.object(FakeAuth, 'authenticate', side_effect=auth):
+            response = await self.rpc('tools/call', {'name': 'add_lodging', 'arguments': {
+                'name': 'Example rental', 'check_in': '2026-10-01', 'check_out': '2026-10-02'}})
+            text = (await response.json())['result']['content'][0]['text']
+            self.assertIn('verified latitude and longitude', text)
+            self.runner.assert_not_awaited()
 
     async def test_fragmented_session_validation_and_size_limit(self):
         class FragmentedContent:

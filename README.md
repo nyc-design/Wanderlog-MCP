@@ -121,3 +121,15 @@ actual Coder HTTPS URL without sharing credentials with contributors.
 
 Upstream: `https://github.com/denysvitali/wanderlog-cli`, pinned in the Dockerfile.
 The upstream license is preserved in the image.
+
+### Actionable tool failures
+
+Tool failures preserve upstream validation and API error messages (up to 6,000
+characters). Session-cookie values and bearer credentials are still redacted;
+errors are not logged. Read requests have a 45-second gateway deadline; writes
+have 120 seconds for reservation lookups and persistence verification. A timeout
+is not proof that a write failed: always read back before retrying.
+
+`add_lodging` requires a resolvable place ID or a property name with verified
+latitude/longitude. The gateway rejects missing location data before invoking
+the CLI, and tool discovery documents that requirement.

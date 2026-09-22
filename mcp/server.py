@@ -3,9 +3,10 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote, unquote
 
 import aiohttp
 from aiohttp import web
@@ -78,7 +79,7 @@ async def cli_rpc(token, method, params, binary="/usr/local/bin/wanderlog"):
                     return message
             raise RuntimeError("Too many upstream notifications")
         try:
-            async with asyncio.timeout(45):
+            async with asyncio.timeout(120 if params.get("name") in WRITE_TOOLS else 45):
                 await send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
                     "protocolVersion": PROTOCOL, "capabilities": {},
                     "clientInfo": {"name": "wanderlog-gateway", "version": "0.1.0"}}})
@@ -123,6 +124,17 @@ async def validate_session(client, token):
                 raise ValueError("Session could not be validated")
     except (aiohttp.ClientError, TimeoutError, TypeError, AttributeError, json.JSONDecodeError):
         raise ValueError("Session could not be validated") from None
+
+
+def tool_failure(message, token):
+    """Retain actionable upstream diagnostics while removing actual credentials."""
+    text = str(message)
+    for secret in sorted({token, quote(token, safe=""), unquote(token)}, key=len, reverse=True):
+        if secret:
+            text = text.replace(secret, "[REDACTED]")
+    text = re.sub(r"(?i)(bearer\s+)[^\s\"'<>]+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)(connect\.sid\s*[=:]\s*)[^\s;,\"'<>]+", r"\1[REDACTED]", text)
+    return {"isError": True, "content": [{"type": "text", "text": text[:6000]}]}
 
 
 def make_app(public_url, state_dir, runner=cli_rpc, validator=None):
@@ -222,6 +234,19 @@ def make_app(public_url, state_dir, runner=cli_rpc, validator=None):
                 return error(request_id, -32602, "Tool not available")
             if method == "tools/call" and not isinstance(params.get("arguments", {}), dict):
                 return error(request_id, -32602, "Arguments must be an object")
+            if method == "tools/call" and params.get("name") == "add_lodging":
+                arguments = params.get("arguments", {})
+                has_place = arguments.get("place_id") or arguments.get("propertyPlaceId")
+                coordinates = (arguments.get("latitude"), arguments.get("longitude"))
+                valid_coordinates = all(isinstance(v, (float, int)) and not isinstance(v, bool)
+                                        for v in coordinates)
+                valid_coordinates = (valid_coordinates and -90 <= coordinates[0] <= 90
+                                     and -180 <= coordinates[1] <= 180 and coordinates != (0, 0))
+                if not has_place and not valid_coordinates:
+                    return web.json_response({"jsonrpc": "2.0", "id": request_id, "result": tool_failure(
+                        "add_lodging requires a valid place_id/propertyPlaceId OR a property name with "
+                        "verified latitude and longitude. Name and dates alone are insufficient. "
+                        "No upstream operation was attempted. Do not invent a location.", identity["session_token"])})
             if method == "tools/list" and "cursor" in params:
                 return error(request_id, -32602, "Pagination not supported")
             if semaphore.locked():
@@ -230,19 +255,40 @@ def make_app(public_url, state_dir, runner=cli_rpc, validator=None):
                 async with semaphore:
                     upstream = await runner(identity["session_token"], method, params)
                 if "error" in upstream:
-                    return error(request_id, -32603, "Wanderlog request failed")
-                result = upstream["result"]
-                if method == "tools/list":
+                    details = upstream["error"]
+                    message = details.get("message", str(details)) if isinstance(details, dict) else str(details)
+                    result = tool_failure("Upstream RPC error: " + message, identity["session_token"])
+                else:
+                    result = upstream["result"]
+                if method == "tools/list" and not result.get("isError"):
                     result = {"tools": [dict(tool, securitySchemes=[{"type": "oauth2", "scopes": ["mcp"]}],
                              annotations={"readOnlyHint": tool["name"] in READ_TOOLS,
                              "destructiveHint": tool["name"] in WRITE_TOOLS, "openWorldHint": True})
                              for tool in result["tools"] if tool["name"] in allowed_tools]}
+                    for tool in result["tools"]:
+                        if tool["name"] == "add_lodging":
+                            tool["description"] = tool.get("description", "") + (
+                                " REQUIRED LOCATION: supply a real place_id/propertyPlaceId, OR the property "
+                                "name plus verified latitude and longitude. Name and dates alone do not work. "
+                                "Do not invent coordinates or substitute an unrelated property.")
+                        if tool["name"] == "add_flight":
+                            tool["description"] = tool.get("description", "") + (
+                                " Flight and airport lookups can be slow. On timeout or failed verification, "
+                                "read back flights before retrying; the operation may have persisted.")
                 elif result.get("isError"):
-                    # Upstream error strings can embed raw API responses.
-                    result = {"isError": True, "content": [{"type": "text", "text":
-                              "Wanderlog request failed. Check arguments or reconnect your account."}]}
-            except (TimeoutError, OSError, RuntimeError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
-                return error(request_id, -32603, "Wanderlog request failed")
+                    messages = [item.get("text", "") for item in result.get("content", [])
+                                if isinstance(item, dict) and item.get("type") == "text"]
+                    result = tool_failure("\n".join(messages) or "Upstream tool failed without an explanation.",
+                                          identity["session_token"])
+            except TimeoutError:
+                result = tool_failure("Gateway timeout while waiting for Wanderlog. "
+                    "Write operations have a 120-second deadline; reads have 45 seconds. "
+                    "The outcome of a write is UNKNOWN: read back the trip before retrying; "
+                    "do not assume nothing was saved.", identity["session_token"])
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
+                result = tool_failure("Gateway/CLI failure (" + type(exc).__name__ + "): " + str(exc)
+                    + ". For writes, read back before retrying because the outcome may be unknown.",
+                    identity["session_token"])
         else:
             return error(request_id, -32601, "Method not found")
         return web.json_response({"jsonrpc": "2.0", "id": request_id, "result": result})
