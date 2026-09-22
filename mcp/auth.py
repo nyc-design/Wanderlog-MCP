@@ -360,31 +360,31 @@ Offline access allows this client to renew access without reconnecting.</p>
 
     async def authorize_post(self, request):
         if not self._origin_ok(request, required=True):
-            return _error("access_denied", 403)
+            return web.json_response({"error": "access_denied", "error_description": "Connection form expired or browser verification failed. Start Connect again from ChatGPT and allow cookies for this site."}, status=403)
         if not self._rate(request, "validate", 10):
             return _error("temporarily_unavailable", 429)
         p = await self._body(request)
         nonce, cookie = p.get("csrf", ""), request.cookies.get(COOKIE, "")
         if not re.fullmatch(r"[A-Za-z0-9_-]{43}", nonce) or len(cookie) != 43:
-            return _error("access_denied", 403)
+            return web.json_response({"error": "access_denied", "error_description": "Connection form expired or browser verification failed. Start Connect again from ChatGPT and allow cookies for this site."}, status=403)
         # Consume before awaiting the remote validator, preventing concurrent replay.
         with self.db:
             row = self.db.execute("SELECT * FROM forms WHERE id=?", (_digest(nonce),)).fetchone()
             if not row or not hmac.compare_digest(row["cookie"], _digest(cookie)):
-                return _error("access_denied", 403)
+                return web.json_response({"error": "access_denied", "error_description": "Connection form expired or browser verification failed. Start Connect again from ChatGPT and allow cookies for this site."}, status=403)
             self.db.execute("DELETE FROM forms WHERE id=?", (_digest(nonce),))
         if row["expires"] <= time.time():
-            return _error("access_denied", 403)
+            return web.json_response({"error": "access_denied", "error_description": "Connection form expired or browser verification failed. Start Connect again from ChatGPT and allow cookies for this site."}, status=403)
         token = p.get("session_token", "")
         if not 1 <= len(token) <= 4096 or any(ord(c) < 33 or ord(c) > 126 for c in token):
-            return _error("access_denied", 400)
+            return web.json_response({"error": "access_denied", "error_description": "Wanderlog session could not be validated. Start Connect again and paste only the current connect.sid cookie VALUE from a signed-in Wanderlog browser session, not the cookie name or a full Cookie header."}, status=400)
         try:
             async with asyncio.timeout(self.VALIDATE_TIMEOUT):
                 result = await self.validate(token)
             if result is not None:
                 return _error("temporarily_unavailable", 502)
         except ValueError:
-            return _error("access_denied", 400)
+            return web.json_response({"error": "access_denied", "error_description": "Wanderlog session could not be validated. Start Connect again and paste only the current connect.sid cookie VALUE from a signed-in Wanderlog browser session, not the cookie name or a full Cookie header."}, status=400)
         except Exception:
             # Upstream exceptions may include credentials: never render/log them.
             return _error("temporarily_unavailable", 502)
