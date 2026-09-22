@@ -56,7 +56,7 @@ HEADERS = {
     "Content-Security-Policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": "strict-origin",
     "Strict-Transport-Security": "max-age=31536000",
 }
 

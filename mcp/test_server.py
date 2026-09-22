@@ -57,6 +57,14 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             await self.rpc('tools/call', {'name': 'list_trips'}, headers)
         self.assertEqual([c[0] for c in self.calls], ['account-A', 'account-B'])
 
+    async def test_form_safe_referrer_policy_and_null_origin_rejection(self):
+        response = await self.rpc('ping')
+        # no-referrer makes browser form POSTs send Origin: null. Send only
+        # the origin as referrer, never authorization query parameters.
+        self.assertEqual(response.headers['Referrer-Policy'], 'strict-origin')
+        response = await self.rpc('ping', headers=dict(self.headers, Origin='null'))
+        self.assertEqual(response.status, 403)
+
     async def test_request_boundaries(self):
         response = await self.rpc('ping', headers=dict(self.headers, Host='attacker.example'))
         self.assertEqual(response.status, 421)

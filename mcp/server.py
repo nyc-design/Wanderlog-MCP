@@ -121,7 +121,7 @@ def make_app(public_url, state_dir, runner=cli_rpc, validator=None):
             # Avoid logging request bodies, headers or exception values.
             response = web.Response(status=500, text="Request failed")
         response.headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
-                                 "Referrer-Policy": "no-referrer",
+                                 "Referrer-Policy": "strict-origin",
                                  "Content-Security-Policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"})
         return response
 
