@@ -22,7 +22,7 @@ model {
     store = container 'Private encrypted SQLite state'
     process = container 'Isolated Wanderlog CLI process'
   }
-  user -> workspace.gateway.auth 'Supplies session token and consents'
+  user -> workspace.gateway.auth 'Supplies session token and selects editing consent'
   chatgpt -> coder 'OAuth and MCP over HTTPS'
   coder -> workspace.gateway.auth 'Authorization endpoints'
   coder -> workspace.gateway.mcp 'POST /mcp'
@@ -30,7 +30,7 @@ model {
   workspace.gateway.verify -> wanderlog.session 'Cookie over HTTPS'
   workspace.gateway.auth -> workspace.store 'Encrypted session and hashed OAuth tokens'
   workspace.gateway.mcp -> workspace.gateway.auth 'Authenticates access token'
-  workspace.gateway.mcp -> workspace.gateway.cli 'Allowlisted read-only tools'
+  workspace.gateway.mcp -> workspace.gateway.cli 'Consent-gated itinerary read/write tools'
   workspace.gateway.cli -> workspace.process 'Private environment and stdio'
   workspace.process -> wanderlog.api 'Per-user cookie over HTTPS'
 }

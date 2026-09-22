@@ -1,6 +1,6 @@
 # Wanderlog MCP
 
-Unofficial, read-only Wanderlog connector for ChatGPT and OAuth-capable remote MCP
+Unofficial Wanderlog itinerary-reading and editing connector for ChatGPT and OAuth-capable remote MCP
 clients. Each user connects their own account by providing the **value of their
 Wanderlog `connect.sid` cookie** on the connector's consent page. No passwords.
 
@@ -55,17 +55,28 @@ Treat it like a password. When the session expires, reconnect with a fresh value
 This service is not affiliated with Wanderlog. Users must trust the operator:
 encryption at rest does not prevent the running service or host administrator
 from accessing credentials. The cookie itself can authorize more than the
-read-only tools this gateway exposes. Do not connect to an operator you distrust.
+itinerary permissions selected during connection. Do not connect to an operator you distrust.
 
-## Available tools
+## Available tools and editing consent
 
-`list_trips`, `get_trip`, `get_trip_plan`, `get_itinerary`, `list_places`,
-`list_sections`, `get_flights`, and `get_trip_sections`.
+The connection page offers an explicit **Allow full itinerary editing** checkbox.
+Existing connections remain read-only: reconnect and select the checkbox to allow
+ChatGPT to create trips; add, change, remove and reorder places; edit notes and visit
+times; manage flights, lodging and trains; autofill days and optimize routes; manage
+checklists, budgets and expenses; delete/restore trips; and manage trip sharing and
+collaborators. Deletion and sharing can have irreversible consequences.
 
-The allowlist is enforced on both discovery and execution. Upstream account,
-configuration, arbitrary API, and write tools are not exposed. Every tool request
-gets a fresh CLI process, temporary HOME, and minimal environment for that user's
-session. Concurrency is capped at eight, with bounded request and process timeouts.
+The gateway exposes the pinned CLI's supported itinerary operations, not arbitrary
+Wanderlog API access. Exact read and write allowlists are in `mcp/server.py`.
+Some operations may still depend on upstream account permissions or product features.
+Tools outside those allowlists—including account, notification, session-store,
+configuration, logout and arbitrary API tools—remain blocked.
+
+Consent is enforced on both tool discovery and execution, preserved through token
+refresh, and defaults to read-only for previously stored grants. Write tools are
+marked as mutating and potentially destructive rather than mislabeled read-only.
+Every request gets a fresh CLI process, temporary HOME, and minimal environment.
+Concurrency is capped at eight, with bounded request and process timeouts.
 
 ## Authentication and privacy
 

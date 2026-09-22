@@ -10,7 +10,8 @@ script dependencies. Coder/envbuilder supplies infrastructure and public HTTPS.
 - Separate opaque MCP tokens; upstream credentials never serve as bearer tokens.
 - Every tool request starts an isolated CLI stdio subprocess with a temporary
   HOME and minimal environment. No shared upstream clients, config, or caches.
-- Explicit read-only tool allowlist; never expose upstream config/account tools.
+- Explicit read/write itinerary tool allowlists; never expose upstream config/account tools.
+- Write access requires per-grant browser consent; existing grants remain read-only.
 - Canonical external origin comes from PUBLIC_URL, not incoming proxy headers.
 - Database and encryption key belong in persistent private STATE_DIR, never Git.
 

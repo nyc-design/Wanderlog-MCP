@@ -2,11 +2,13 @@
 
 import asyncio
 import base64
+from contextlib import closing
 import hashlib
 import importlib.util
 import os
 from pathlib import Path
 import re
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -137,7 +139,8 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         identity = await response.json()
         self.assertEqual(identity["session_token"], SESSION)
-        self.assertEqual(set(identity), {"id", "session_token"})
+        self.assertEqual(set(identity), {"id", "session_token", "can_write"})
+        self.assertIs(identity["can_write"], False)
         self.assertEqual(self.calls, [SESSION])
         self.assertEqual((await self.access(tokens["refresh_token"])).status, 401)
         key = Path(self.directory.name, "fernet.key")
@@ -153,6 +156,69 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(key.read_bytes(), old_key)
         response = await self.access(tokens["access_token"])
         self.assertEqual(await response.json(), identity)
+
+    async def test_editing_checkbox_is_explicit_and_unchecked(self):
+        client_id = await self.register()
+        response = await self.client.get("/authorize", params=self.params(client_id))
+        text = await response.text()
+        checkbox = re.search(r'<input[^>]+name="allow_editing"[^>]*>', text).group(0)
+        self.assertIn('type="checkbox"', checkbox)
+        self.assertIn('value="yes"', checkbox)
+        self.assertNotIn("checked", checkbox)
+        for disclosure in ("full itinerary editing", "deleting trips", "trip sharing",
+                           "Leave unchecked for read-only access",
+                           "Configuration and account-management tools are never available"):
+            self.assertIn(disclosure, text)
+
+    async def test_editing_consent_persists_and_refresh_retains_permission(self):
+        for consent in (None, "yes", "no", "true", "", "YES"):
+            with self.subTest(consent=consent):
+                client_id = await self.register()
+                # A client-supplied query parameter is not browser consent.
+                data, headers = await self.form(client_id, allow_editing="yes")
+                if consent is not None:
+                    data["allow_editing"] = consent
+                response = await self.client.post("/authorize", data=data, headers=headers,
+                                                  allow_redirects=False)
+                self.assertEqual(response.status, 303)
+                code = parse_qs(urlsplit(response.headers["Location"]).query)["code"][0]
+                response = await self.exchange(client_id, code, scope="mcp offline_access")
+                self.assertEqual(response.status, 200)
+                tokens = await response.json()
+                self.assertEqual(tokens["scope"], "mcp offline_access")
+                identity = await (await self.access(tokens["access_token"])).json()
+                self.assertIs(identity["can_write"], consent == "yes")
+                stored = self.auth.db.execute("SELECT can_write FROM grants WHERE id=?",
+                                              (identity["id"],)).fetchone()
+                self.assertEqual(stored["can_write"], int(consent == "yes"))
+                await self.client.close()
+                await self.start()
+                self.assertEqual(await (await self.access(tokens["access_token"])).json(), identity)
+                response = await self.refresh(client_id, tokens["refresh_token"], allow_editing="yes")
+                self.assertEqual(response.status, 200)
+                refreshed = await response.json()
+                self.assertEqual(refreshed["scope"], "mcp offline_access")
+                self.assertEqual(await (await self.access(refreshed["access_token"])).json(), identity)
+
+    async def test_existing_grants_migrate_as_read_only(self):
+        client_id, tokens = await self.tokens()
+        for pre_scope in (False, True):
+            with self.subTest(pre_scope=pre_scope):
+                await self.client.close()
+                with closing(sqlite3.connect(Path(self.directory.name, "auth.sqlite3"))) as db:
+                    with db:
+                        db.execute("ALTER TABLE grants DROP COLUMN can_write")
+                        if pre_scope:
+                            for column in ("scope", "rate_start", "rate_count"):
+                                db.execute(f"ALTER TABLE grants DROP COLUMN {column}")
+                await self.start()
+                identity = await (await self.access(tokens["access_token"])).json()
+                self.assertIs(identity["can_write"], False)
+                response = await self.refresh(client_id, tokens["refresh_token"])
+                self.assertEqual(response.status, 200)
+                tokens = await response.json()
+                self.assertEqual(tokens["scope"], "mcp offline_access")
+                self.assertEqual(await (await self.access(tokens["access_token"])).json(), identity)
 
     async def test_redirect_policy(self):
         bad = ["http://chatgpt.com/cb", "http://localhost/cb", "https://chatgpt.com.evil.test/cb",

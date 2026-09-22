@@ -84,6 +84,33 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await client.close()
 
+    async def test_write_consent_enforced_on_list_and_call(self):
+        async def auth(request):
+            return {'id': 'grant', 'session_token': 'session',
+                    'can_write': request.headers.get('X-Test-Write') == 'yes'}
+        self.runner.side_effect = None
+        self.runner.return_value = {'result': {'tools': [
+            {'name': 'list_trips'}, {'name': 'add_place'}, {'name': 'delete_trip'},
+            {'name': 'server_logout'}, {'name': 'set_session_store_value'}]}}
+        with patch.object(FakeAuth, 'authenticate', side_effect=auth):
+            response = await self.rpc('tools/list')
+            self.assertEqual([t['name'] for t in (await response.json())['result']['tools']], ['list_trips'])
+            self.runner.reset_mock()
+            response = await self.rpc('tools/call', {'name': 'delete_trip'})
+            self.assertIn('error', await response.json())
+            self.runner.assert_not_called()
+            headers = dict(self.headers, **{'X-Test-Write': 'yes'})
+            response = await self.rpc('tools/list', headers=headers)
+            tools = (await response.json())['result']['tools']
+            self.assertEqual([t['name'] for t in tools], ['list_trips', 'add_place', 'delete_trip'])
+            self.assertFalse(tools[1]['annotations']['readOnlyHint'])
+            self.assertTrue(tools[2]['annotations']['destructiveHint'])
+            self.runner.return_value = {'result': {'content': []}}
+            response = await self.rpc('tools/call', {'name': 'add_place', 'arguments': {}}, headers=headers)
+            self.assertIn('result', await response.json())
+            response = await self.rpc('tools/call', {'name': 'server_logout'}, headers=headers)
+            self.assertIn('error', await response.json())
+
     async def test_request_boundaries(self):
         response = await self.rpc('ping', headers=dict(self.headers, Host='attacker.example'))
         self.assertEqual(response.status, 421)

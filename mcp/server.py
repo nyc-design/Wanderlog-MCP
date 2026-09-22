@@ -13,8 +13,34 @@ from auth import build_auth
 
 # Explicit allowlist: upstream also exposes account/configuration tools which must
 # never be reachable merely because a future upstream release adds them.
-TOOLS = frozenset({"list_trips", "get_trip", "get_trip_plan", "get_itinerary",
-                   "list_places", "list_sections", "get_flights", "get_trip_sections"})
+READ_TOOLS = frozenset({
+    "list_trips", "get_trip", "get_trip_plan", "get_itinerary", "list_places",
+    "list_sections", "get_flights", "get_trip_sections", "export_trip",
+    "get_trip_places", "get_trip_history", "get_trip_images", "get_trip_expenses_csv",
+    "search_places", "search_places_google", "search_places_wanderlog",
+    "search_places_in_trips", "autocomplete_places", "autocomplete_airports",
+    "get_place_details", "get_place_details_v2", "get_multiple_place_details",
+    "get_places_metadata", "get_recommended_places", "search_hotels",
+    "search_restaurants", "get_distances_for_mode", "get_all_distance_info_for_place",
+    "get_all_airlines", "get_flight_stops", "search_geo", "search_geos",
+    "list_trip_invites", "get_map_layer_groups", "get_trip_update_required",
+    "get_if_edited", "find_place_from_lng_lat", "get_place_cards",
+})
+WRITE_TOOLS = frozenset({
+    "add_place", "remove_place", "move_place", "reorder_places", "update_place_notes",
+    "update_place_visit_time", "delete_itinerary_block", "delete_section",
+    "clear_section_blocks", "nuke_trip_places", "autofill_day", "optimize_route",
+    "create_trip", "create_example_trip", "create_trip_from_flights", "copy_trip",
+    "update_trip", "delete_trip", "delete_trips", "restore_trip", "create_guide_from_trip",
+    "update_trip_plan_geo", "add_flight", "update_flight", "delete_flight",
+    "add_lodging", "update_lodging", "delete_lodging", "add_train",
+    "add_checklist_items", "toggle_checklist_item", "set_trip_budget",
+    "add_trip_expense", "update_trip_expense", "delete_trip_expense",
+    "add_collaborator", "remove_collaborator", "send_trip_invites",
+    "get_or_create_share_key",
+})
+TOOLS = READ_TOOLS | WRITE_TOOLS
+
 PROTOCOL = "2025-06-18"
 SUPPORTED = {PROTOCOL, "2025-11-25"}
 MAX_OUTPUT = 8 * 1024 * 1024
@@ -29,7 +55,7 @@ async def cli_rpc(token, method, params, binary="/usr/local/bin/wanderlog"):
                "XDG_DATA_HOME": home + "/data", "WANDERLOG_DISABLE_KEYCHAIN": "1",
                "WANDERLOG_AUTH_SESSION_COOKIE": token}
         proc = await asyncio.create_subprocess_exec(
-            binary, "mcp", env=env, stdin=asyncio.subprocess.PIPE,
+            binary, "mcp", "--enable-write", env=env, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             limit=MAX_OUTPUT)
         async def send(message):
@@ -145,6 +171,7 @@ def make_app(public_url, state_dir, runner=cli_rpc, validator=None):
 
     async def mcp(request):
         identity = await auth.authenticate(request)
+        allowed_tools = TOOLS if identity.get("can_write", False) else READ_TOOLS
         if request.method != "POST":
             raise web.HTTPMethodNotAllowed(request.method, ["POST"])
         if request.content_type != "application/json":
@@ -184,12 +211,14 @@ def make_app(public_url, state_dir, runner=cli_rpc, validator=None):
             result = {"protocolVersion": requested if isinstance(requested, str) and requested in SUPPORTED else PROTOCOL,
                       "capabilities": {"tools": {}},
                       "serverInfo": {"name": "wanderlog-mcp", "version": "0.1.0"},
-                      "instructions": "Read-only Wanderlog access for the connected account."}
+                      "instructions": ("Full Wanderlog itinerary editing is authorized, including deletion and sharing."
+                                       if identity.get("can_write", False) else
+                                       "Read-only access. Reconnect and consent to editing to enable write tools.")}
         elif method == "ping":
             result = {}
         elif method in ("tools/list", "tools/call"):
             if method == "tools/call" and (not isinstance(params.get("name"), str)
-                                            or params["name"] not in TOOLS):
+                                            or params["name"] not in allowed_tools):
                 return error(request_id, -32602, "Tool not available")
             if method == "tools/call" and not isinstance(params.get("arguments", {}), dict):
                 return error(request_id, -32602, "Arguments must be an object")
@@ -205,9 +234,9 @@ def make_app(public_url, state_dir, runner=cli_rpc, validator=None):
                 result = upstream["result"]
                 if method == "tools/list":
                     result = {"tools": [dict(tool, securitySchemes=[{"type": "oauth2", "scopes": ["mcp"]}],
-                             annotations={"readOnlyHint": True,
-                             "destructiveHint": False, "openWorldHint": True})
-                             for tool in result["tools"] if tool["name"] in TOOLS]}
+                             annotations={"readOnlyHint": tool["name"] in READ_TOOLS,
+                             "destructiveHint": tool["name"] in WRITE_TOOLS, "openWorldHint": True})
+                             for tool in result["tools"] if tool["name"] in allowed_tools]}
                 elif result.get("isError"):
                     # Upstream error strings can embed raw API responses.
                     result = {"isError": True, "content": [{"type": "text", "text":

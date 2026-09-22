@@ -7,6 +7,8 @@ connect.sid cookie value against https://wanderlog.com/api/user and owns HTTP.
 Never submit Wanderlog passwords. Supported scopes are mcp and offline_access;
 omitted scope defaults to mcp. Refresh tokens require offline_access consent.
 Existing pre-scope grants retain their previously issued refresh capability.
+Editing is a separate grant permission, not an OAuth scope: only explicit browser
+consent enables can_write; existing grants and unchecked forms stay read-only.
 
 Configuration: AUTH_CALLBACK_HOSTS is a comma-separated exact HTTPS hostname
 allowlist (default: chatgpt.com,chat.openai.com). No wildcards, subdomain matching,
@@ -171,6 +173,8 @@ class Auth:
                 self.db.execute("ALTER TABLE grants ADD COLUMN scope TEXT NOT NULL DEFAULT 'mcp offline_access'")
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(grants)")}
         with self.db:
+            if "can_write" not in columns:
+                self.db.execute("ALTER TABLE grants ADD COLUMN can_write INTEGER NOT NULL DEFAULT 0")
             if "rate_start" not in columns:
                 self.db.execute("ALTER TABLE grants ADD COLUMN rate_start REAL NOT NULL DEFAULT 0")
             if "rate_count" not in columns:
@@ -339,7 +343,8 @@ class Auth:
 <title>Unofficial Wanderlog connector</title><h1>Unofficial Wanderlog connector</h1>
 <p>This service is not affiliated with or endorsed by Wanderlog. Connect only if you trust this server.</p>
 <p>Paste your Wanderlog session token, never your password. It will be encrypted on this server.
-This connector initially exposes read-only access. However, the session cookie itself may allow
+This connector provides read-only access unless you explicitly allow editing below.
+However, the session cookie itself may allow
 account edits: only connect if you trust the server operator with that broader access.
 The connected client can access your Wanderlog account through this connector until revoked or expired.</p>
 <ol><li>Sign in to Wanderlog in your browser at <code>https://wanderlog.com</code>.</li>
@@ -353,6 +358,9 @@ Offline access allows this client to renew access without reconnecting.</p>
 <form method="post" action="{html.escape(self.prefix + '/authorize', quote=True)}">
 <input type="hidden" name="csrf" value="{nonce}">
 <label>Wanderlog session token <input type="password" name="session_token" required maxlength="4096" autocomplete="off"></label>
+<p><label><input type="checkbox" name="allow_editing" value="yes"> Allow full itinerary editing,
+including creating, changing, and deleting trips and itinerary items, and changing trip sharing.</label>
+Leave unchecked for read-only access. Configuration and account-management tools are never available.</p>
 <button type="submit">Connect account</button></form></html>'''
         response = web.Response(text=body, content_type="text/html")
         response.set_cookie(COOKIE, cookie, max_age=self.FORM_TTL, secure=True, httponly=True, samesite="Lax", path="/")
@@ -396,10 +404,10 @@ Offline access allows this client to renew access without reconnecting.</p>
         with self.db:
             if not self._capacity("grants", self.MAX_GRANTS):
                 return _error("temporarily_unavailable", 503)
-            self.db.execute("INSERT INTO grants (id, client, session, expires, scope) VALUES (?, ?, ?, ?, ?)",
+            self.db.execute("INSERT INTO grants (id, client, session, expires, scope, can_write) VALUES (?, ?, ?, ?, ?, ?)",
                 (grant_id, params["client_id"], self.fernet.encrypt(token.encode()),
                  min(time.time() + (self.GRANT_TTL if "offline_access" in params.get("scope", "mcp").split() else self.ACCESS_TTL), client["expires"]),
-                 params.get("scope", "mcp")))
+                 params.get("scope", "mcp"), int(p.get("allow_editing") == "yes")))
             self.db.execute("INSERT INTO codes VALUES (?, ?, ?, ?, ?)",
                 (_digest(code), grant_id, params["redirect_uri"], params["code_challenge"], time.time() + self.CODE_TTL))
         query = {"code": code, "iss": self.public_url}
@@ -503,7 +511,7 @@ Offline access allows this client to renew access without reconnecting.</p>
         match = re.fullmatch(r"(?i:Bearer) ([A-Za-z0-9_-]{43})", values[0])
         if not match:
             self._unauthorized(request)
-        row = self.db.execute("""SELECT grants.id, grants.session FROM tokens
+        row = self.db.execute("""SELECT grants.id, grants.session, grants.can_write FROM tokens
             JOIN grants ON grants.id=tokens.grant_id JOIN clients ON clients.id=grants.client
             WHERE tokens.digest=? AND tokens.kind='access' AND tokens.used=0
             AND tokens.expires>? AND grants.expires>? AND clients.expires>?""",
@@ -527,7 +535,7 @@ Offline access allows this client to renew access without reconnecting.</p>
             with self.db:
                 self.db.execute("DELETE FROM grants WHERE id=?", (row["id"],))
             self._unauthorized(request)
-        return {"id": row["id"], "session_token": session}
+        return {"id": row["id"], "session_token": session, "can_write": bool(row["can_write"])}
 
     async def start(self, app):
         async def expire():
