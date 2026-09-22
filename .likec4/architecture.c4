@@ -1,0 +1,66 @@
+specification {
+  element person
+  element system
+  element container
+  element fn
+}
+model {
+  user = person 'User'
+  chatgpt = system 'ChatGPT'
+  coder = system 'Coder HTTPS port forwarding'
+  wanderlog = system 'Wanderlog' {
+    session = fn 'Wanderlog: GET /api/user'
+    api = fn 'Wanderlog trip API'
+  }
+  workspace = system 'Standalone MCP workspace' {
+    gateway = container 'Python gateway' {
+      auth = fn 'auth.build_auth()'
+      mcp = fn 'server.make_app()'
+      verify = fn 'server.validate_session()'
+      cli = fn 'server.cli_rpc()'
+    }
+    store = container 'Private encrypted SQLite state'
+    process = container 'Isolated Wanderlog CLI process'
+  }
+  user -> workspace.gateway.auth 'Supplies session token and consents'
+  chatgpt -> coder 'OAuth and MCP over HTTPS'
+  coder -> workspace.gateway.auth 'Authorization endpoints'
+  coder -> workspace.gateway.mcp 'POST /mcp'
+  workspace.gateway.auth -> workspace.gateway.verify 'Validates session'
+  workspace.gateway.verify -> wanderlog.session 'Cookie over HTTPS'
+  workspace.gateway.auth -> workspace.store 'Encrypted session and hashed OAuth tokens'
+  workspace.gateway.mcp -> workspace.gateway.auth 'Authenticates access token'
+  workspace.gateway.mcp -> workspace.gateway.cli 'Allowlisted read-only tools'
+  workspace.gateway.cli -> workspace.process 'Private environment and stdio'
+  workspace.process -> wanderlog.api 'Per-user cookie over HTTPS'
+}
+views {
+  view context {
+    title '1. System context'
+    include *
+  }
+  view containers of workspace {
+    title '2. Standalone workspace'
+    include *
+  }
+  view components of workspace.gateway {
+    title '3. Gateway components'
+    include *
+  }
+  dynamic view accountConnection {
+    title 'Flow: Account connection'
+    user -> workspace.gateway.auth
+    workspace.gateway.auth -> workspace.gateway.verify
+    workspace.gateway.verify -> wanderlog.session
+    workspace.gateway.auth -> workspace.store
+  }
+  dynamic view toolRequest {
+    title 'Flow: Isolated tool request'
+    chatgpt -> coder
+    coder -> workspace.gateway.mcp
+    workspace.gateway.mcp -> workspace.gateway.auth
+    workspace.gateway.mcp -> workspace.gateway.cli
+    workspace.gateway.cli -> workspace.process
+    workspace.process -> wanderlog.api
+  }
+}

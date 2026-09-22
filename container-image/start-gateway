@@ -1,0 +1,125 @@
+#!/usr/local/bin/python
+"""Start an independently supervised gateway using private runtime configuration."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import signal
+import stat
+import subprocess
+import sys
+import time
+from urllib.parse import urlsplit
+
+os.umask(0o077)
+STATE = Path(os.environ.get('STATE_DIR', '/home/coder/.local/share/wanderlog-mcp')).resolve()
+os.environ['STATE_DIR'] = str(STATE)
+STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+CONFIG = STATE / 'runtime.json'
+SCRIPT = str(Path(__file__).resolve())
+
+
+def environment():
+    env = os.environ.copy()
+    try:
+        # Never execute operator configuration as shell code or follow symlinks.
+        fd = os.open(CONFIG, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        pass
+    else:
+        with os.fdopen(fd) as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
+                raise ValueError('runtime.json must be an operator-owned regular file with mode 0600')
+            config = json.load(source)
+            if not isinstance(config, dict) or set(config) != {'PUBLIC_URL'}:
+                raise ValueError('runtime.json must contain only PUBLIC_URL')
+            env['PUBLIC_URL'] = config['PUBLIC_URL']
+    value = env.get('PUBLIC_URL', '')
+    if not isinstance(value, str):
+        raise ValueError('PUBLIC_URL must be an HTTPS origin')
+    parsed = urlsplit(value)
+    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path or parsed.query or parsed.fragment or any(c.isspace() for c in value)):
+        raise ValueError('Set PUBLIC_URL to an exact HTTPS origin in the environment or ' + str(CONFIG))
+    # Validate malformed ports before the supervisor starts.
+    parsed.port
+    return env
+
+
+def configured():
+    try:
+        return environment()
+    except (ValueError, OSError) as exc:
+        print('Gateway not started: ' + str(exc), file=sys.stderr)
+        return None
+
+
+def stop_existing():
+    try:
+        pid = int((STATE / 'gateway.pid').read_text())
+        proc = Path('/proc') / str(pid)
+        args = (proc / 'cmdline').read_bytes().split(b'\0')
+        # Refuse stale PID files rather than killing an unrelated process.
+        if proc.stat().st_uid != os.getuid() or args[1:4] != [SCRIPT.encode(), b'--supervise', str(STATE).encode()]:
+            return
+        os.kill(pid, signal.SIGTERM)
+    except (FileNotFoundError, ProcessLookupError, ValueError):
+        return
+    for _ in range(100):
+        with (STATE / 'gateway.lock').open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                time.sleep(0.1)
+    raise SystemExit('Gateway did not stop; refusing to launch another supervisor')
+
+
+def supervise():
+    with (STATE / 'gateway.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        child = None
+
+        def stop(signum, frame):
+            if child is not None and child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
+            raise SystemExit(0)
+
+        signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
+        (STATE / 'gateway.pid').write_text(str(os.getpid()))
+        try:
+            while True:
+                env = configured()
+                if env is None:
+                    return
+                child = subprocess.Popen(['python', '/opt/wanderlog-mcp/mcp/server.py'], env=env)
+                while child.poll() is None:
+                    time.sleep(0.1)
+                child = None
+                time.sleep(2)
+        finally:
+            (STATE / 'gateway.pid').unlink(missing_ok=True)
+
+
+if sys.argv[1:2] == ['--supervise']:
+    supervise()
+elif sys.argv[1:] in ([], ['--restart']):
+    if configured() is not None:
+        if sys.argv[1:] == ['--restart']:
+            stop_existing()
+        with (STATE / 'gateway.log').open('a') as log:
+            subprocess.Popen([sys.executable, SCRIPT, '--supervise', str(STATE)],
+                             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                             start_new_session=True)
+else:
+    raise SystemExit('Usage: start-gateway [--restart]')

@@ -1,0 +1,9 @@
+# Exact build inputs only. Never admit runtime state or credentials.
+**
+!container-image/
+!container-image/Dockerfile
+!container-image/start-gateway
+!mcp/
+!mcp/server.py
+!mcp/auth.py
+!mcp/requirements.txt

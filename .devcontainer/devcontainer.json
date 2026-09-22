@@ -1,0 +1,20 @@
+{
+  "name": "Wanderlog MCP",
+  "containerUser": "coder",
+  "remoteUser": "coder",
+  "containerEnv": {
+    "STATE_DIR": "/home/coder/.local/share/wanderlog-mcp"
+  },
+  "overrideCommand": true,
+  "postStartCommand": "/usr/local/bin/start-gateway",
+  "forwardPorts": [
+    8080
+  ],
+  "portsAttributes": {
+    "8080": {
+      "label": "Wanderlog MCP",
+      "onAutoForward": "silent"
+    }
+  },
+  "image": "ghcr.io/nyc-design/wanderlog-mcp:latest"
+}
